@@ -1,0 +1,264 @@
+version: "3.5"
+services:
+  #  Metrics collector.
+  #  It scrapes targets defined in --promscrape.config
+  #  And forward them to --remoteWrite.url
+  vmagent:
+    container_name: vmagent
+    image: victoriametrics/vmagent:v1.99.0
+    depends_on:
+      - "victoriametrics"
+    ports:
+      - 127.0.0.1:8429:8429
+    volumes:
+      - /data/vmagentdata:/vmagentdata
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - "--promscrape.config=/etc/prometheus/prometheus.yml"
+      - "--remoteWrite.url=http://victoriametrics:8428/api/v1/write"
+    networks:
+      - monitoring
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "7"
+  # VictoriaMetrics instance, a single process responsible for
+  # storing metrics and serve read requests.
+  victoriametrics:
+    container_name: victoriametrics
+    image: victoriametrics/victoria-metrics:v1.99.0
+    ports:
+      - 127.0.0.1:8428:8428
+      - 127.0.0.1:8089:8089
+      - 127.0.0.1:8089:8089/udp
+      - 127.0.0.1:2003:2003
+      - 127.0.0.1:2003:2003/udp
+      - 127.0.0.1:4242:4242
+    volumes:
+      - /data/vmdata:/storage:rw
+    command:
+      - "--storageDataPath=/storage"
+      - "--graphiteListenAddr=:2003"
+      - "--opentsdbListenAddr=:4242"
+      - "--httpListenAddr=:8428"
+      - "--influxListenAddr=:8089"
+      - "--vmalert.proxyURL=http://vmalert:8880"
+    networks:
+      - monitoring
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "7"
+
+  # Grafana instance configured with VictoriaMetrics as datasource
+        # - ./provisioning/dashboards:/etc/grafana/provisioning/dashboards
+  grafana:
+    container_name: grafana
+    image: grafana/grafana:10.3.1
+    # user: "$UID:$GID"
+    depends_on:
+      - "victoriametrics"
+    ports:
+      - 127.0.0.1:3000:3000
+    volumes:
+      - ./grafana.ini:/etc/grafana/grafana.ini
+      - /data/grafanadata:/var/lib/grafana:rwx
+      - /data/grafanadata/plugins:/var/lib/grafana/plugins:rwx
+      - /data/grafanadata/dashboards:/var/lib/grafana/dashboards
+      - /data/sourcedata:/etc/grafana/provisioning/datasources
+    environment:
+      GF_SECURITY_ADMIN_USER: elastic
+      GF_SECURITY_ADMIN_PASSWORD: password
+    networks:
+      - monitoring
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "7"
+
+  # vmalert executes alerting and recording rules
+  vmalert:
+    container_name: vmalert
+    image: victoriametrics/vmalert:v1.99.0
+    depends_on:
+      - "victoriametrics"
+      - "alertmanager"
+    ports:
+      - 127.0.0.1:8880:8880
+    volumes:
+      - ./alerts.yml:/etc/alerts/alerts.yml
+      - ./alerts-health.yml:/etc/alerts/alerts-health.yml
+      - ./alerts-vmagent.yml:/etc/alerts/alerts-vmagent.yml
+      - ./alerts-vmalert.yml:/etc/alerts/alerts-vmalert.yml
+    command:
+      - "--datasource.url=http://victoriametrics:8428/"
+      - "--remoteRead.url=http://victoriametrics:8428/"
+      - "--remoteWrite.url=http://victoriametrics:8428/"
+      - "--notifier.url=http://alertmanager:9093/"
+      - "--rule=/etc/alerts/*.yml"
+      # display source of alerts in grafana
+      - "--external.url=http://127.0.0.1:3000" #grafana outside container
+      # when copypaste the line be aware of '$$' for escaping in '$expr'
+      - '--external.alert.source=explore?orgId=1&left={"datasource":"VictoriaMetrics","queries":[{"expr":{{$$expr|jsonEscape|queryEscape}},"refId":"A"}],"range":{"from":"now-1h","to":"now"}}'
+    networks:
+      - monitoring
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "7"
+
+  # alertmanager receives alerting notifications from vmalert
+  # and distributes them according to --config.file.
+  alertmanager:
+    container_name: alertmanager
+    image: prom/alertmanager:v0.27.0
+    volumes:
+      - ./alertmanager.yml:/config/alertmanager.yml
+      - ./telegram.tmpl:/etc/alertmanager/template/telegram.tmpl
+    command:
+      - "--config.file=/config/alertmanager.yml"
+    ports:
+      - 127.0.0.1:9093:9093
+    networks:
+      - monitoring
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "7"
+
+  # vmauth is a router and balancer for HTTP requests.
+  # It is configured via --auth.config and balances
+  # read requests from Grafana, vmui, vmalert among vmselects.
+  # It can be used as an authentication proxy.
+  vmauth:
+    container_name: vmauth
+    image: victoriametrics/vmauth:v1.99.0
+    depends_on:
+      - "victoriametrics"
+    volumes:
+      - ./auth-cluster.yml:/etc/auth.yml
+    command:
+      - '--auth.config=/etc/auth.yml'
+    ports:
+      - 127.0.0.1:8427:8427
+    networks:
+      - monitoring
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "7"
+
+ # elk for logging-monitoring nginx
+  elasticsearch:
+    container_name: elasticsearch
+    image: elasticsearch:7.17.18
+    depends_on:
+      - "grafana"  
+    volumes:
+      - /data/esdata:/usr/share/elasticsearch/data
+      - ./elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml
+    environment:
+      - bootstrap.memory_lock=true
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - "max_concurrent_shard_requests=5"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - 127.0.0.1:9200:9200
+      - 127.0.0.1:9300:9300
+    stdin_open: true
+    tty: true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "7"
+    restart: always
+    networks:
+      - monitoring
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 3072M
+        reservations:
+          cpus: '0.0001'
+          memory: 20M
+
+  logstash:
+    container_name: logstash
+    image: logstash:7.17.18
+    depends_on:
+      - elasticsearch
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - ./logstash.conf:/usr/share/logstash/pipeline/logstash.conf
+      - ./logstash.template.json:/usr/share/logstash/templates/logstash.template.json
+    ports:
+      - 172.21.0.1:5044:5044
+    links:
+      - elasticsearch:elasticsearch
+    stdin_open: true
+    tty: true
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "7"
+    restart: always
+    networks:
+      - monitoring
+ #socks5 proxy as filebeat secure gateway
+  socks:
+    container_name: socks
+    depends_on:
+      - logstash
+    build: 
+      context: ./socks/
+      dockerfile: Dockerfile  
+    links:
+      - logstash:logstash
+    ports:
+     - 1080:1080
+    restart: always
+    networks:
+      - monitoring
+    deploy:
+      resources:
+        limits:
+          cpus: '0.3'
+          memory: 500M
+        reservations:
+          cpus: '0.0001'
+          memory: 20M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "7"
+
+networks:
+  monitoring:
+    name: monitoring
+    ipam: 
+      config:
+        - subnet: 172.21.0.0/16
+          gateway: 172.21.0.1

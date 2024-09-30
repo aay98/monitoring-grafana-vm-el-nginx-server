@@ -1,0 +1,36 @@
+{{- /* Telegram message to use: {{ template "telegram_message2" . }} */ -}}
+
+{{ define "__alerts_list" -}}
+{{ range . -}}
+  {{- if ne (index .Labels "alertname") "" -}}
+  *  {{- if eq .Status "firing" }}🚨{{ else }}☘️{{ end -}}
+{{- if ne (index .Labels "severity") "" -}}
+{{ index .Labels "severity" }} {{- end -}}*
+*{{ index .Labels "alertname" }}*
+🕙 {{ .StartsAt.Format "15:04:05    🗓️ 2006-01-02" }}
+    {{- if len .Annotations }}
+      {{- range .Annotations.SortedPairs -}}
+        - {{ .Name }}: {{ .Value }}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}} 
+
+{{ define "__telegram_title" -}}
+{{ if ne (index .CommonLabels "severity") "" -}} *{{ index .CommonLabels "severity" }}* {{- end -}}
+{{ if ne (index .CommonLabels "alertname") "" -}}
+  [{{ index .CommonLabels "alertname" }}]
+{{- end -}}
+{{- end -}}
+
+{{ define "telegram_message2" -}}
+{{- if gt (len .Alerts.Firing) 0 -}}
+  *🚨 ALARM *(#{{ .Alerts.Firing | len }})
+  {{- template "__alerts_list" .Alerts.Firing -}}
+{{- end -}}
+{{- if gt (len .Alerts.Resolved) 0 -}}
+  ☘️ RESOLVED {{ template "__telegram_title" . }} (#{{ .Alerts.Resolved | len }})
+  {{- template "__alerts_list" .Alerts.Resolved -}}
+{{- end -}}
+{{- end -}}

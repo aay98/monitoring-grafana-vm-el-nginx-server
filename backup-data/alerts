@@ -1,0 +1,32 @@
+{{- /* Telegram message to use: {{ template "telegram.message2" . }} */ -}}
+{{ define "__alerts_list" -}}
+{{ range . }}
+{{if ne (index .Labels "alertname") "" -}}
+{{ if eq .Status "firing" }}🚨{{ else }}☘️{{ end }}
+    {{- if ne (index .Labels "severity") "" -}}
+        <u><b>P{{ index .Labels "severity" }}</b></u> {{ end -}}
+<b>{{ index .Labels "alertname" }}</b> 🕙 {{ .StartsAt.Format "15:04:05    🗓️ 2006-01-02" }}{{ end -}}
+{{ if len .Annotations }}
+<i>Annotations:</i>
+    {{ range .Annotations.SortedPairs -}}
+    - {{ .Name }}: {{ .Value }}
+    {{ end -}}
+{{ end }}
+{{- end -}} {{- /* range */ -}}
+{{- end -}} {{- /* define __alerts_list */ -}}
+
+{{ define "__telegram.title" -}}
+{{ if ne (index .CommonLabels "severity") "" }} <u><b>P{{ index .CommonLabels "severity" }}</b></u> {{ end -}}
+{{ if ne (index .CommonLabels "alertname") "" -}}
+    [{{ index .CommonLabels "alertname" }}]
+{{- end -}}
+{{- end -}}{{- /* define __telegram */ -}}
+{{ define "telegram_message2" }}
+    {{ if gt (len .Alerts.Firing) 0 }}
+    🚨 <b>ALARM</b> (#{{ .Alerts.Firing | len }})
+    {{- template "__alerts_list" .Alerts.Firing }}{{ end -}}
+    {{ if gt (len .Alerts.Resolved) 0 }}
+    ☘️ <b>RESOLVED</b>{{ template "__telegram.title" . }} (#{{ .Alerts.Resolved | len }})
+    {{- template "__alerts_list" .Alerts.Resolved }}{{ end }}
+<a href="http://grafana:3000/d/a47f348d-0b03-4bf5-a822-c38726b07265/small-dash?orgId=1&refresh=5s">📲 Grafana</a>
+{{- end -}}

@@ -1,0 +1,18 @@
+cluster.name: "my-cluster"
+node.name: "replica-node"
+discovery.type: "single-node"
+path.data: /usr/share/elasticsearch/data
+path.logs: /usr/share/elasticsearch/logs
+
+xpack.ccr.enabled: true
+
+cluster.remote.primary-cluster:
+  seeds:
+    - elasticsearch:9300
+    
+# curl -X PUT "localhost:9201/follower-index/_ccr/follow?wait_for_active_shards=1" -H 'Content-Type: application/json' -d'
+# {
+#   "remote_cluster": "primary-cluster",
+#   "leader_index": "leader-index"
+# }
+# '

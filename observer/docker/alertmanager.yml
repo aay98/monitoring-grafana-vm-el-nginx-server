@@ -1,0 +1,27 @@
+global:
+ resolve_timeout: 5m
+
+templates:
+  - '/etc/alertmanager/template/telegram.tmpl'
+
+route: # задаются правила маршрутизации алертов
+ group_by: ['alertname'] # Алерты группируются по UUID кластера.
+ group_wait: 5m
+ group_interval: 15m
+ repeat_interval: 12h # Если в течение 12 часов алерт не перейдет в статус Resolved, он будет отправлен повторно
+ receiver: 'telegram'
+ routes:
+  - receiver: telegram
+    continue: true
+    matchers:
+     - severity="critical"
+
+receivers: # получатели сообщений
+ - name: 'telegram'
+   telegram_configs:
+    - chat_id: -111111111
+      bot_token: 111111111:AAAAAAAAAAAAAAAAAAAA
+      api_url: "https://api.telegram.org"
+      send_resolved: true # отвечает за отправку уведомлений при восстановлении
+      message: '{{ template "telegram_message2" . }}'
+      parse_mode: "Markdown"
